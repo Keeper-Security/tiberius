@@ -69,11 +69,51 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
         builder = builder.danger_accept_invalid_hostnames(true);
         builder = builder.use_sni(false);
     } else {
-        // The base trust anchors are the platform trust store, which opentls
-        // consults automatically (there is no `WebpkiRoots` source here — that
-        // variant only exists with the rustls backend). Layer every accumulated
-        // extra CA on top, loading ALL certificates from each multi-cert file or
-        // bundle via the shared, backend-agnostic loader.
+        // The base trust anchors are the platform trust store (there is no
+        // `WebpkiRoots` source here — that variant only exists with the rustls
+        // backend). On Unix opentls finds it automatically via openssl-probe.
+        // On Windows that probe finds nothing — its trust anchors live in
+        // registry-backed certificate stores — so load the ROOT store into the
+        // connector explicitly. The current-user view is a composite that
+        // includes the local-machine store, so certs installed via certlm.msc
+        // (machine) or GP-pushed (e.g. Zscaler) are picked up automatically.
+        // Individual certificates OpenSSL cannot parse are skipped, matching
+        // what rustls-native-certs does.
+        //
+        // NOTE: open_current_user("ROOT") is correct for user-session
+        // processes (e.g. a desktop app). A Windows service would need
+        // open_local_machine("ROOT") instead, since services run in session 0
+        // and the current-user store may be empty there.
+        #[cfg(windows)]
+        match schannel::cert_store::CertStore::open_current_user("ROOT") {
+            Ok(store) => {
+                for windows_cert in store.certs() {
+                    match Certificate::from_der(windows_cert.to_der()) {
+                        Ok(root_cert) => {
+                            builder = builder.add_root_certificate(root_cert);
+                        }
+                        Err(e) => {
+                            event!(
+                                Level::WARN,
+                                "Skipping an unparseable certificate from the Windows ROOT store: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                event!(
+                    Level::WARN,
+                    "Could not open the Windows ROOT certificate store; certificate validation will have no trusted roots: {}",
+                    e
+                );
+            }
+        }
+
+        // Layer every accumulated extra CA on top, loading ALL certificates
+        // from each multi-cert file or bundle via the shared, backend-agnostic
+        // loader.
         for cert in load_extra_cas(&config.trust.extra_cas)? {
             builder = builder.add_root_certificate(cert);
         }

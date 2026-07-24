@@ -171,6 +171,13 @@ version = "0.2.1"
 optional = true
 features = ["io-async-std", "vendored"]
 
+# Used by the vendored-openssl backend to load trusted roots from the
+# Windows certificate store: the vendored OpenSSL only probes Unix
+# filesystem paths, so without this it trusts nothing on Windows.
+[target.'cfg(windows)'.dependencies.schannel]
+version = "0.1"
+optional = true
+
 [dev-dependencies.uuid]
 version = "1.0"
 features = ["v4"]
@@ -254,7 +261,7 @@ rustls = ["tokio-rustls", "tokio-util", "rustls-native-certs", "rustls-webpki", 
 # roots are a pinned snapshot that goes stale without dependency updates.
 rustls-webpki-roots = ["rustls", "dep:webpki-roots"]
 native-tls = ["async-native-tls", "rustls-pki-types"]
-vendored-openssl = ["opentls", "rustls-pki-types"]
+vendored-openssl = ["opentls", "rustls-pki-types", "schannel"]
 # Enables Windows-style SSPI/NTLM authentication (`AuthMethod::Windows`) on Unix
 # platforms without requiring Kerberos, via the pure-Rust `sspi` crate. On
 # Windows the same authentication is provided by the `winauth` feature.
