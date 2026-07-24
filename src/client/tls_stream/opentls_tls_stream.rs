@@ -53,6 +53,41 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
         }
         TrustConfig::Default => {
             event!(Level::INFO, "Using default trust configuration.");
+
+            // The vendored OpenSSL discovers root certificates by probing
+            // Unix filesystem paths (openssl-probe), which finds nothing on
+            // Windows — its trust anchors live in registry-backed
+            // certificate stores. Load the ROOT store into the connector so
+            // certificate validation can succeed; the current-user view is
+            // a composite that includes the local-machine store. Individual
+            // certificates OpenSSL cannot parse are skipped, matching what
+            // rustls-native-certs does.
+            #[cfg(windows)]
+            match schannel::cert_store::CertStore::open_current_user("ROOT") {
+                Ok(store) => {
+                    for windows_cert in store.certs() {
+                        match Certificate::from_der(windows_cert.to_der()) {
+                            Ok(root_cert) => {
+                                builder = builder.add_root_certificate(root_cert);
+                            }
+                            Err(e) => {
+                                event!(
+                                    Level::WARN,
+                                    "Skipping an unparseable certificate from the Windows ROOT store: {}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    event!(
+                        Level::WARN,
+                        "Could not open the Windows ROOT certificate store; certificate validation will have no trusted roots: {}",
+                        e
+                    );
+                }
+            }
         }
     }
 
