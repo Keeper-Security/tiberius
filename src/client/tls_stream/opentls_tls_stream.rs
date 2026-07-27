@@ -59,9 +59,15 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
             // Windows — its trust anchors live in registry-backed
             // certificate stores. Load the ROOT store into the connector so
             // certificate validation can succeed; the current-user view is
-            // a composite that includes the local-machine store. Individual
-            // certificates OpenSSL cannot parse are skipped, matching what
-            // rustls-native-certs does.
+            // a composite that includes the local-machine store, so certs
+            // installed via certlm.msc (machine) or GP-pushed (e.g. Zscaler)
+            // are picked up automatically. Individual certificates OpenSSL
+            // cannot parse are skipped, matching what rustls-native-certs does.
+            //
+            // NOTE: open_current_user("ROOT") is correct for user-session
+            // processes (e.g. the KeeperDB desktop app). A Windows service
+            // would need open_local_machine("ROOT") instead, since services
+            // run in session 0 and the current-user store may be empty there.
             #[cfg(windows)]
             match schannel::cert_store::CertStore::open_current_user("ROOT") {
                 Ok(store) => {
