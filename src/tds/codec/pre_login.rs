@@ -67,7 +67,11 @@ impl PreloginMessage {
             (EncryptionLevel::NotSupported, EncryptionLevel::NotSupported) => {
                 EncryptionLevel::NotSupported
             }
+            // Optional encryption accepts an endpoint that explicitly has no
+            // TLS support. This lets clients interoperate with protocol-aware
+            // proxies that terminate authentication in plaintext.
             (EncryptionLevel::Off, EncryptionLevel::Off) => EncryptionLevel::Off,
+            (EncryptionLevel::Off, EncryptionLevel::NotSupported) => EncryptionLevel::NotSupported,
             (EncryptionLevel::On, EncryptionLevel::Off)
             | (EncryptionLevel::On, EncryptionLevel::NotSupported) => {
                 panic!("Server does not allow the requested encryption level.")
@@ -253,6 +257,44 @@ impl Decode<BytesMut> for PreloginMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn optional_encryption_accepts_server_without_tls() {
+        let mut response = PreloginMessage::new();
+        response.encryption = EncryptionLevel::NotSupported;
+
+        assert_eq!(
+            response.negotiated_encryption(EncryptionLevel::Off),
+            EncryptionLevel::NotSupported
+        );
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn optional_encryption_keeps_server_tls_choices() {
+        for (server_encryption, expected) in [
+            (EncryptionLevel::Off, EncryptionLevel::Off),
+            (EncryptionLevel::On, EncryptionLevel::On),
+            (EncryptionLevel::Required, EncryptionLevel::On),
+        ] {
+            let mut response = PreloginMessage::new();
+            response.encryption = server_encryption;
+
+            assert_eq!(
+                response.negotiated_encryption(EncryptionLevel::Off),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn prelogin_roundtrip() {
