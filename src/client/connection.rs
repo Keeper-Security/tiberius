@@ -18,7 +18,12 @@ use crate::{
 };
 use asynchronous_codec::Framed;
 use bytes::BytesMut;
-#[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
+#[cfg(any(
+    windows,
+    feature = "winauth",
+    feature = "integrated-auth-gssapi",
+    feature = "sspi-rs"
+))]
 use codec::TokenSspi;
 use futures_util::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use futures_util::ready;
@@ -46,7 +51,9 @@ use std::{cmp, fmt::Debug, io, pin::Pin, task};
 use task::Poll;
 use tracing::{event, Level};
 #[cfg(all(windows, feature = "winauth"))]
-use winauth::{windows::NtlmSspiBuilder, NextBytes};
+use winauth::windows::NtlmSspiBuilder;
+#[cfg(all(feature = "winauth", not(all(unix, feature = "sspi-rs"))))]
+use winauth::NextBytes;
 use zeroize::{Zeroize, Zeroizing};
 
 /// A `Connection` is an abstraction between the [`Client`] and the server. It
@@ -230,7 +237,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         TokenStream::new(self).flush_done().await
     }
 
-    #[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
+    #[cfg(any(
+        windows,
+        feature = "winauth",
+        feature = "integrated-auth-gssapi",
+        feature = "sspi-rs"
+    ))]
     /// Flush the incoming token stream until receiving `SSPI` token.
     async fn flush_sspi(&mut self) -> crate::Result<TokenSspi> {
         TokenStream::new(self).flush_sspi().await
@@ -750,7 +762,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 )
                 .await?;
             }
-            #[cfg(all(windows, feature = "winauth"))]
+            // winauth's NTLMv2 client is pure Rust, so this arm serves every
+            // platform; on Unix the sspi-rs arm above wins when both are on.
+            #[cfg(all(feature = "winauth", not(all(unix, feature = "sspi-rs"))))]
             AuthMethod::Windows(auth) => {
                 let spn = self.context.spn().to_string();
                 let builder = winauth::NtlmV2ClientBuilder::new().target_spn(spn);

@@ -154,6 +154,7 @@ impl Context {
 
     #[cfg(any(
         windows,
+        feature = "winauth",
         all(unix, any(feature = "integrated-auth-gssapi", feature = "sspi-rs"))
     ))]
     pub fn spn(&self) -> &str {
@@ -269,6 +270,7 @@ mod tests {
 
         #[cfg(any(
             windows,
+            feature = "winauth",
             all(unix, any(feature = "integrated-auth-gssapi", feature = "sspi-rs"))
         ))]
         assert_eq!(ctx.spn(), "MSSQLSvc/dbhost:1433");
@@ -277,6 +279,7 @@ mod tests {
         // it doesn't panic.
         #[cfg(not(any(
             windows,
+            feature = "winauth",
             all(unix, any(feature = "integrated-auth-gssapi", feature = "sspi-rs"))
         )))]
         let _ = ctx;
