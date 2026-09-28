@@ -104,7 +104,11 @@ impl PreloginMessage {
             (EncryptionLevel::NotSupported, EncryptionLevel::NotSupported) => {
                 EncryptionLevel::NotSupported
             }
+            // Optional encryption accepts an endpoint that explicitly has no
+            // TLS support. This lets clients interoperate with protocol-aware
+            // proxies that terminate authentication in plaintext.
             (EncryptionLevel::Off, EncryptionLevel::Off) => EncryptionLevel::Off,
+            (EncryptionLevel::Off, EncryptionLevel::NotSupported) => EncryptionLevel::NotSupported,
             (EncryptionLevel::On, EncryptionLevel::Off)
             | (EncryptionLevel::On, EncryptionLevel::NotSupported) => {
                 return Err(Error::Protocol(
@@ -585,6 +589,48 @@ mod tests {
         let mut msg = PreloginMessage::new();
         msg.instance_name = Some("otherinstance".to_string());
         assert!(msg.validate_instance(Some("MSSQLServer")).is_err());
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn optional_encryption_accepts_server_without_tls() {
+        let mut response = PreloginMessage::new();
+        response.encryption = EncryptionLevel::NotSupported;
+
+        assert_eq!(
+            response
+                .negotiated_encryption(EncryptionLevel::Off)
+                .unwrap(),
+            EncryptionLevel::NotSupported
+        );
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn optional_encryption_keeps_server_tls_choices() {
+        for (server_encryption, expected) in [
+            (EncryptionLevel::Off, EncryptionLevel::Off),
+            (EncryptionLevel::On, EncryptionLevel::On),
+            (EncryptionLevel::Required, EncryptionLevel::On),
+        ] {
+            let mut response = PreloginMessage::new();
+            response.encryption = server_encryption;
+
+            assert_eq!(
+                response
+                    .negotiated_encryption(EncryptionLevel::Off)
+                    .unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
