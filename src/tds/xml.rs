@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 /// Provides information of the location for the schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct XmlSchema {
     db_name: String,
     owner: String,
@@ -45,6 +46,7 @@ impl XmlSchema {
 /// A representation of XML data in TDS. Holds the data as a UTF-8 string and
 /// and optional information about the schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct XmlData {
     data: String,
     schema: Option<Arc<XmlSchema>>,
@@ -65,9 +67,8 @@ impl XmlData {
     }
 
     /// Returns information about the schema of the XML file, if existing.
-    #[allow(clippy::option_as_ref_deref)]
     pub fn schema(&self) -> Option<&XmlSchema> {
-        self.schema.as_ref().map(|s| &**s)
+        self.schema.as_deref()
     }
 
     /// Takes the XML string out from the struct.
@@ -108,10 +109,77 @@ impl Encode<BytesMut> for XmlData {
         // PLP_TERMINATOR, no next blobs
         dst.put_u32_le(0);
 
+        // The on-the-wire blob length is a byte count (`length` UTF-16 code
+        // units => `length * 2` bytes) that must fit in the u32 length field.
+        let byte_len = length.checked_mul(2).ok_or_else(|| {
+            crate::Error::Protocol("xml payload byte length overflows u32".into())
+        })?;
+
         let dst: &mut [u8] = dst.borrow_mut();
         let mut dst = &mut dst[len_pos..];
-        dst.put_u32_le(length * 2);
+        dst.put_u32_le(byte_len);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xml_schema_accessors() {
+        let schema = XmlSchema::new("db", "owner", "collection");
+        assert_eq!(schema.db_name(), "db");
+        assert_eq!(schema.owner(), "owner");
+        assert_eq!(schema.collection(), "collection");
+    }
+
+    #[test]
+    fn xml_schema_eq_and_clone() {
+        let a = XmlSchema::new("db", "owner", "collection");
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn xml_data_without_schema() {
+        let data = XmlData::new("<root/>");
+        assert!(data.schema().is_none());
+        assert_eq!(data.as_ref(), "<root/>");
+        assert_eq!(format!("{}", data), "<root/>");
+        assert_eq!(data.into_string(), "<root/>");
+    }
+
+    #[test]
+    fn xml_data_with_schema() {
+        let schema = Arc::new(XmlSchema::new("db", "owner", "collection"));
+        let mut data = XmlData::new("<a>1</a>");
+        data.set_schema(schema.clone());
+
+        let stored = data.schema().expect("schema present");
+        assert_eq!(stored.db_name(), "db");
+        assert_eq!(stored.owner(), "owner");
+        assert_eq!(stored.collection(), "collection");
+    }
+
+    #[test]
+    fn encode_writes_plp_header_and_backpatches_length() {
+        let mut buf = BytesMut::new();
+        XmlData::new("ab")
+            .encode(&mut buf)
+            .expect("encode succeeds");
+
+        // 8 (unknown-size marker) + 4 (length) + 2*2 (utf16 chars) + 4 (terminator)
+        assert_eq!(buf.len(), 8 + 4 + 4 + 4);
+
+        // unknown size marker
+        assert_eq!(&buf[0..8], &0xfffffffffffffffe_u64.to_le_bytes());
+        // backpatched length is number of chars * 2 bytes
+        assert_eq!(&buf[8..12], &(4u32).to_le_bytes());
+        // 'a' then 'b' as UTF-16LE
+        assert_eq!(&buf[12..16], &[b'a', 0, b'b', 0]);
+        // PLP terminator
+        assert_eq!(&buf[16..20], &(0u32).to_le_bytes());
     }
 }

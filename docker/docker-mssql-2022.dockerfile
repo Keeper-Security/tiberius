@@ -1,5 +1,9 @@
 FROM mcr.microsoft.com/mssql/server:2022-latest
 
-COPY --chmod=444 certs/server.* /certs/
-COPY --chmod=444 certs/customCA.* /certs/
+USER root
+COPY certs/server.* /certs/
+RUN chmod 444 /certs/server.*
+COPY certs/customCA.* /certs/
+RUN chmod 444 /certs/customCA.*
 COPY --chown=mssql docker-mssql.conf /var/opt/mssql/mssql.conf
+USER mssql

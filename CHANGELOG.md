@@ -1,5 +1,83 @@
 # Changes
 
+## Version 0.13.0
+
+- feat: TLS trust configuration is revamped around two orthogonal axes plus a
+  bypass, unifying community PRs #330 and #290:
+  - `Config::trust_cert_ca_bundle(bytes)` (and the `ConfigBuilder` mirror) trusts
+    additional CA certificates supplied as in-memory bytes, without writing them
+    to a temporary file. The bytes are auto-detected: a `-----BEGIN` marker is
+    parsed as a multi-certificate PEM bundle (e.g. the AWS RDS root bundle),
+    otherwise they are treated as a single DER certificate.
+  - `Config::trust_webpki_roots()` (and the `ConfigBuilder` mirror) bases trust
+    on a compiled-in snapshot of Mozilla's root CA store instead of the OS trust
+    store. rustls-only, behind the new `rustls-webpki-roots` feature. Note: the
+    bundled roots are a pinned snapshot that goes stale (missing newly added or
+    newly distrusted CAs) unless the dependency is updated and the app rebuilt.
+  - `Config::trust_cert_ca(path)` now accepts **multi-certificate** files (the
+    previous "exactly one certificate" restriction is lifted); every certificate
+    in the file is trusted, on all three TLS backends.
+- BREAKING: repeated `trust_cert_ca` calls now **accumulate** rather than
+  replace-last-wins. `trust_cert_ca(a); trust_cert_ca(b)` (and any mix with
+  `trust_cert_ca_bundle`) trusts every supplied CA, layered on top of the base
+  trust anchors. Code that relied on a later call overriding an earlier one must
+  now set the CA only once.
+- fix: a CA source (file or in-memory bundle) that yields zero usable
+  certificates is now a hard error naming the source, on every backend, instead
+  of silently degrading to base-roots-only trust. The `native-tls` and
+  `vendored-openssl` backends also now load *all* certificates from a
+  multi-certificate CA file/bundle (previously only the first was used) and
+  preserve the path plus underlying I/O error in load failures, matching rustls.
+- BREAKING: the connection-string `encrypt` default is now `Required` (was
+  `Off`) when a TLS backend is enabled, matching modern ADO.NET; without a TLS
+  backend it remains `NotSupported`.
+- BREAKING: removed the `sql-browser-async-std` feature and the async-std SQL
+  Browser integration.
+- feat: `Command`/RPC API for parameterized stored-procedure calls, plus a
+  `#[derive(TableValueRow)]` macro (in `tiberius-macros`) for table-valued
+  parameters.
+- feat: `sspi-rs` feature for Windows-style SSPI/NTLM authentication on Unix via
+  the pure-Rust `sspi` crate (no Kerberos required).
+- feat: `serde` feature adding `Serialize`/`Deserialize` impls for query result
+  types (`Row`, `Column`, `ColumnData`, `Numeric`, and the time/xml types).
+- feat: client-certificate authentication, including PEM/DER key files
+  (`Config::client_certificate`) and PKCS#12 bundles
+  (`Config::client_certificate_pkcs12`).
+- BREAKING: credentials (SQL Server / Windows passwords, the AAD bearer token
+  and the PKCS#12 password) are now stored as `secrecy::SecretString` instead of
+  `zeroize::Zeroizing<String>`. They are still zeroized on drop, and their
+  `Debug` now renders as `SecretBox<str>([REDACTED])` (was `<HIDDEN>`). The
+  `AuthMethod::AADToken` tuple variant consequently holds a `SecretString`: code
+  that pattern-matched it and read the token via `Deref`/`Display` must now call
+  `secrecy::ExposeSecret::expose_secret`. Constructing auth via
+  `AuthMethod::aad_token`/`sql_server`/`windows` is unchanged.
+- feat: connection & command timeouts (closes #375 and #360), matching
+  ADO.NET's two-knob model and backed by a runtime-agnostic timer so they apply
+  under any async runtime:
+  - `Config::handshake_timeout` bounds the whole post-TCP handshake (prelogin,
+    TLS negotiation and login), surfacing a `TimedOut` error instead of hanging
+    forever when a server accepts the TCP connection and then stalls
+    mid-handshake — the reported failure against `azure-sql-edge` on macOS
+    (#375) and the stalled-peer case in #360. Defaults to 15s (ADO.NET
+    `Connect Timeout` parity). The handshake also emits per-stage `tracing`
+    DEBUG events so a stall can be pinpointed.
+  - `Config::command_timeout` bounds each server round-trip while reading
+    command results (`query`/`execute`/`simple_query`, the `bulk_insert`
+    acknowledgement and `column_metadata`). It measures per-round-trip stall,
+    not total enumeration: the deadline resets on every delivered token, so a
+    slow consumer never trips it — only a stalled server does. Defaults to 30s
+    (ADO.NET `Command Timeout` parity).
+  - BREAKING: both knobs now default to a bounded value (15s handshake / 30s
+    command) where pre-0.13 they were effectively unbounded. A command that
+    legitimately runs longer than 30s between server round-trips (e.g. a long
+    `WAITFOR`, a big sort/aggregate or a slow stored procedure) will now fail
+    with a `TimedOut` error unless you raise or disable `command_timeout`. Pass
+    `None` to either knob to restore the pre-0.13 wait-indefinitely behaviour.
+- chore: upgraded the rustls stack to 0.23 (tokio-rustls 0.26) and resolved the
+  associated advisories.
+- fix: numerous decode-path hardening fixes (protocol errors instead of panics
+  or stream desyncs on hostile server input across the codec/token modules).
+
 ## Version 0.12.3
 - feat: improve column type accuracy (#347)
 - fix: encoding of zero-length values for large varlen columns (#315)
